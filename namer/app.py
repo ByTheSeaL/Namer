@@ -501,7 +501,10 @@ class NamerWindow(QMainWindow):
         rows, status = self._history[self._hist_pos]
         self.tree.clear()
         for name, why in rows:
-            self.tree.addTopLevelItem(QTreeWidgetItem([name, why]))
+            item = QTreeWidgetItem([name, why])
+            item.setToolTip(0, name)
+            item.setToolTip(1, why)  # full rationale on hover — column truncates
+            self.tree.addTopLevelItem(item)
         self.results_stack.setCurrentIndex(0)
         self.statusBar().showMessage(status)
         self.generate_btn.setEnabled(True)
