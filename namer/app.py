@@ -149,8 +149,8 @@ class SettingsDialog(QDialog):
 class Bridge(QObject):
     """Thread-safe channel from worker threads to the UI (queued signals)."""
     models_ready = Signal(list)
-    results_ready = Signal(list, str)  # rows, status
-    error_ready = Signal(str)          # message (does not enter history)
+    results_ready = Signal(int, list, str)  # request seq, rows, status
+    error_ready = Signal(int, str)          # request seq, message (no history entry)
 
 
 class NamerWindow(QMainWindow):
@@ -165,6 +165,7 @@ class NamerWindow(QMainWindow):
         self._history: list[tuple[list, str]] = []  # (rows, status) per result set
         self._hist_pos = -1
         self._last_description: str | None = None
+        self._req_seq = 0  # bumping this orphans any in-flight request
 
         self.bridge = Bridge()
         self.bridge.models_ready.connect(self._set_models)
@@ -312,9 +313,18 @@ class NamerWindow(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._tree_menu)
 
+        loading_page = QWidget()
+        load_layout = QVBoxLayout(loading_page)
+        load_layout.addStretch(1)
         self.loading_label = QLabel("")
         self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setWordWrap(True)
         self.loading_label.setProperty("hint", True)
+        load_layout.addWidget(self.loading_label)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self._cancel_request)
+        load_layout.addWidget(cancel_btn, alignment=Qt.AlignCenter)
+        load_layout.addStretch(1)
 
         error_page = QWidget()
         e_layout = QVBoxLayout(error_page)
@@ -330,9 +340,9 @@ class NamerWindow(QMainWindow):
         e_layout.addStretch(1)
 
         self.results_stack = QStackedWidget()
-        self.results_stack.addWidget(self.tree)           # page 0: results
-        self.results_stack.addWidget(self.loading_label)  # page 1: loading
-        self.results_stack.addWidget(error_page)          # page 2: error
+        self.results_stack.addWidget(self.tree)      # page 0: results
+        self.results_stack.addWidget(loading_page)   # page 1: loading (cancellable)
+        self.results_stack.addWidget(error_page)     # page 2: error
         layout.addWidget(self.results_stack, stretch=1)
 
         hint = QLabel("Double-click to copy · right-click a name to iterate on it")
@@ -439,23 +449,33 @@ class NamerWindow(QMainWindow):
         self.statusBar().showMessage(message)
         self.loading_label.setText(message)
         self.results_stack.setCurrentIndex(1)
+        self._req_seq += 1
         threading.Thread(target=self._run_llm,
-                         args=(description, context, model, extra),
+                         args=(self._req_seq, description, context, model, extra),
                          daemon=True).start()
 
-    def _run_llm(self, description, context, model, extra):
+    def _cancel_request(self):
+        # Soft cancel: orphan the in-flight request; its late reply is ignored.
+        self._req_seq += 1
+        self.results_stack.setCurrentIndex(0)
+        self.generate_btn.setEnabled(True)
+        self.statusBar().showMessage("Request cancelled.")
+
+    def _run_llm(self, seq, description, context, model, extra):
         ok, reason = llm.is_available()
         if not ok:
             self.bridge.error_ready.emit(
-                reason.replace("\n", " ") + " (File → Settings)")
+                seq, reason.replace("\n", " ") + " (File → Settings)")
             return
         try:
             rows = llm.suggest(description, context, model, extra=extra)
-            self.bridge.results_ready.emit(rows, f"{len(rows)} ideas from {model}.")
+            self.bridge.results_ready.emit(seq, rows, f"{len(rows)} ideas from {model}.")
         except Exception as exc:
-            self.bridge.error_ready.emit(str(exc))
+            self.bridge.error_ready.emit(seq, str(exc))
 
-    def _show_results(self, rows, status):
+    def _show_results(self, seq, rows, status):
+        if seq != self._req_seq:
+            return  # response from a cancelled/superseded request
         # New result set: drop any forward history, then append.
         del self._history[self._hist_pos + 1:]
         self._history.append((rows, status))
@@ -468,8 +488,10 @@ class NamerWindow(QMainWindow):
             self._hist_pos = new_pos
             self._render()
 
-    def _show_error(self, message):
+    def _show_error(self, seq, message):
         """Overlay an error on the results area — no history entry is made."""
+        if seq != self._req_seq:
+            return  # error from a cancelled/superseded request
         self.error_label.setText(message)
         self.results_stack.setCurrentIndex(2)
         self.statusBar().showMessage("LLM request failed.")

@@ -138,11 +138,22 @@ def suggest(description: str, context: str, model: str,
             {"role": "user", "content": prompt},
         ],
     })
-    text = data["choices"][0]["message"]["content"]
+    # OpenRouter can return an error object inside a 200 response.
+    if "error" in data:
+        err = data["error"]
+        raise ValueError(err.get("message", str(err)) if isinstance(err, dict) else str(err))
+    choices = data.get("choices") or []
+    if not choices:
+        raise ValueError(f"Model returned no choices: {json.dumps(data)[:200]}")
+    # content can be null (e.g. reasoning-only replies from some free models)
+    message = choices[0].get("message") or {}
+    text = message.get("content") or message.get("reasoning") or ""
 
     # Models sometimes wrap JSON in markdown fences or prose — extract the object.
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
-        raise ValueError(f"Model returned no JSON: {text[:200]}")
+        raise ValueError(
+            f"Model returned no JSON: {text[:200] if text else '(empty response)'} "
+            "— try a different model.")
     parsed = json.loads(match.group(0))
     return [(item["name"], item.get("rationale", "")) for item in parsed["names"]]
