@@ -5,17 +5,20 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
       matrix:
         include:
           - os: windows-latest
-            artifact: Namer.exe
+            asset: Namer-windows.exe
           - os: macos-latest
-            artifact: Namer.app
+            asset: Namer-macos.zip
           - os: ubuntu-latest
-            artifact: Namer
+            asset: Namer-linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +27,31 @@ jobs:
           python-version: "3.12"
       - run: pip install pyinstaller
       - run: pyinstaller --onefile --windowed --name Namer run.py
+      - name: Rename for release
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp dist/Namer.exe "${{ matrix.asset }}"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            (cd dist && zip -qr "../${{ matrix.asset }}" Namer.app)
+          else
+            cp dist/Namer "${{ matrix.asset }}"
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: Namer-${{ matrix.os }}
-          path: dist/
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
