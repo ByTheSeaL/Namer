@@ -62,6 +62,13 @@ def get_api_key() -> str | None:
         return None
 
 
+def save_api_key(key: str) -> None:
+    """Persist the OpenRouter key to the config file (empty string clears it)."""
+    KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    KEY_FILE.write_text(key.strip() + "\n" if key.strip() else "")
+    KEY_FILE.chmod(0o600)
+
+
 def is_available() -> tuple[bool, str]:
     if get_api_key():
         return True, ""
