@@ -309,7 +309,8 @@ class NamerWindow(QMainWindow):
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
         self.tree.setColumnWidth(0, 190)
-        self.tree.itemDoubleClicked.connect(self._copy_item)
+        self.tree.itemDoubleClicked.connect(
+            lambda item, _col: self._iterate(item.text(0), "similar"))
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._tree_menu)
 
@@ -345,7 +346,7 @@ class NamerWindow(QMainWindow):
         self.results_stack.addWidget(error_page)     # page 2: error
         layout.addWidget(self.results_stack, stretch=1)
 
-        hint = QLabel("Double-click to copy · right-click a name to iterate on it")
+        hint = QLabel("Double-click a name to see similar ideas · right-click for more")
         hint.setProperty("hint", True)
         layout.addWidget(hint)
 
@@ -406,13 +407,26 @@ class NamerWindow(QMainWindow):
         copy = menu.addAction(f"Copy “{name}”")
         copy.triggered.connect(lambda: self._copy_item(item, 0))
         menu.addSeparator()
-        expand = menu.addAction("More like this — expand the idea")
-        expand.triggered.connect(lambda: self._iterate(name, "expand"))
-        variations = menu.addAction("Variations — close permutations")
-        variations.triggered.connect(lambda: self._iterate(name, "variations"))
-        refine = menu.addAction("Refine — keep what works, fix the rest")
-        refine.triggered.connect(lambda: self._iterate(name, "refine"))
+        similar = menu.addAction("Show similar")
+        similar.triggered.connect(lambda: self._iterate(name, "similar"))
+        reprompt = menu.addAction("Re-prompt with this…")
+        reprompt.triggered.connect(lambda: self._reprompt(name))
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _reprompt(self, name):
+        """Seed the description with the liked name so the user can say more
+        about it, then generate — the LLM sees it's building on that option."""
+        current = self.description.toPlainText().rstrip()
+        addition = (f"I like the earlier suggestion “{name}” — build on it. "
+                    "What I like about it: ")
+        self.description.setPlainText(
+            current + "\n\n" + addition if current else addition)
+        cursor = self.description.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.description.setTextCursor(cursor)
+        self.description.setFocus()
+        self.statusBar().showMessage(
+            f"Say more about “{name}”, then hit Generate.")
 
     def _iterate(self, name, kind):
         description = self.description.toPlainText().strip()

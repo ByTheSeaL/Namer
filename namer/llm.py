@@ -102,17 +102,12 @@ def list_models() -> list[str]:
         return FALLBACK_MODELS
 
 
-# Instructions for iterating on a specific result the user liked.
+# Instruction for iterating on a specific result the user liked.
 ITERATE = {
-    "expand": "The name “{name}” is in the right direction. Generate names that "
-              "build on the same idea, metaphor, or root — push the concept "
-              "further and explore where it leads.",
-    "variations": "Generate close variations and permutations of the name "
-                  "“{name}”: alternate spellings, word-order changes, different "
-                  "affixes, adjacent word forms. Stay close to the original.",
-    "refine": "The name “{name}” half-works. Identify what's good about it and "
-              "generate improved, more polished alternatives that keep its "
-              "strengths while fixing its weaknesses.",
+    "similar": "The name “{name}” is close to what the user wants. Generate "
+               "more names like it: close variations and permutations, and "
+               "names that build on the same idea, root, metaphor, feel, "
+               "and style.",
 }
 
 
