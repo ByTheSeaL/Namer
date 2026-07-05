@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Bash(python3 -c \"import tkinter; print\\('tkinter OK'\\)\")",
+      "Bash(python3 -c \"import anthropic\")",
+      "Bash(curl -s --max-time 10 \"https://api.datamuse.com/words?ml=fast+messenger&max=5\")",
+      "Bash(python3 *)",
+      "Bash(env)",
+      "Bash(xvfb-run -a python3 -c ' *)",
+      "Bash(Xvfb :99 -screen 0 1024x768x24)",
+      "Bash(DISPLAY=:99 python3 -c ' *)",
+      "Bash(kill %1)",
+      "Bash(command -v import)",
+      "Bash(DISPLAY=:99 import -window root /tmp/namer.png)",
+      "Bash(command -v xwd)",
+      "Bash(DISPLAY=:99 xwd -root -out /tmp/namer.xwd)",
+      "Bash(gh auth *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git -c user.name=ByTheSeaL -c user.email=cabullen@gmail.com commit -m 'Namer v0.1 — cross-platform naming app *)"
+    ]
+  }
+}
