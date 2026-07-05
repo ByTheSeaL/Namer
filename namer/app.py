@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from . import __version__, llm
+from . import __version__, llm, prefs
 from .constants import CONTEXTS
 from .icon import app_icon
 from .wordstore import WordStore
@@ -38,6 +38,7 @@ QPushButton:hover { background: #3b5be0; }
 QPushButton:disabled { background: #a9b4d0; }
 QTreeWidget::item { padding: 3px; }
 QLabel[hint="true"] { color: #888; }
+QLabel[error="true"] { color: #c0392b; font-weight: 600; }
 """
 
 
@@ -92,8 +93,9 @@ class CompletingTextEdit(QPlainTextEdit):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, store: WordStore, parent=None):
         super().__init__(parent)
+        self._store = store
         self.setWindowTitle("Settings")
         self.setMinimumWidth(420)
 
@@ -120,10 +122,24 @@ class SettingsDialog(QDialog):
         note.setProperty("hint", True)
         layout.addWidget(note)
 
+        self.clear_words_btn = QPushButton(
+            f"Clear autocomplete word database ({store.count()} words)")
+        self.clear_words_btn.clicked.connect(self._clear_words)
+        layout.addWidget(self.clear_words_btn)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _clear_words(self):
+        answer = QMessageBox.question(
+            self, "Clear words",
+            f"Delete all {self._store.count()} learned autocomplete words?")
+        if answer == QMessageBox.Yes:
+            self._store.clear()
+            self.clear_words_btn.setText("Autocomplete word database cleared")
+            self.clear_words_btn.setEnabled(False)
 
     def accept(self):
         llm.save_api_key(self.key_edit.text())
@@ -134,6 +150,7 @@ class Bridge(QObject):
     """Thread-safe channel from worker threads to the UI (queued signals)."""
     models_ready = Signal(list)
     results_ready = Signal(list, str)  # rows, status
+    error_ready = Signal(str)          # message (does not enter history)
 
 
 class NamerWindow(QMainWindow):
@@ -143,13 +160,16 @@ class NamerWindow(QMainWindow):
         self.resize(920, 560)
 
         self.store = WordStore()
+        self.prefs = prefs.load()
         self._all_models: list[str] = list(llm.FALLBACK_MODELS)
         self._history: list[tuple[list, str]] = []  # (rows, status) per result set
         self._hist_pos = -1
+        self._last_description: str | None = None
 
         self.bridge = Bridge()
         self.bridge.models_ready.connect(self._set_models)
         self.bridge.results_ready.connect(self._show_results)
+        self.bridge.error_ready.connect(self._show_error)
 
         self._build_menu()
 
@@ -160,6 +180,10 @@ class NamerWindow(QMainWindow):
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([460, 460])  # 50-50
         self.setCentralWidget(self.splitter)
+
+        last_model = self.prefs.get("last_model")
+        if last_model:
+            self.model.setCurrentText(last_model)
 
         self.statusBar().showMessage(
             "Describe the thing you want to name, then hit Generate.")
@@ -195,7 +219,7 @@ class NamerWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _show_settings(self):
-        if SettingsDialog(self).exec() == QDialog.Accepted:
+        if SettingsDialog(self.store, self).exec() == QDialog.Accepted:
             self.statusBar().showMessage("Settings saved.")
 
     def _show_about(self):
@@ -292,9 +316,23 @@ class NamerWindow(QMainWindow):
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setProperty("hint", True)
 
+        error_page = QWidget()
+        e_layout = QVBoxLayout(error_page)
+        e_layout.addStretch(1)
+        self.error_label = QLabel("")
+        self.error_label.setAlignment(Qt.AlignCenter)
+        self.error_label.setWordWrap(True)
+        self.error_label.setProperty("error", True)
+        e_layout.addWidget(self.error_label)
+        dismiss = QPushButton("Dismiss")
+        dismiss.clicked.connect(lambda: self.results_stack.setCurrentIndex(0))
+        e_layout.addWidget(dismiss, alignment=Qt.AlignCenter)
+        e_layout.addStretch(1)
+
         self.results_stack = QStackedWidget()
-        self.results_stack.addWidget(self.tree)          # page 0: results
+        self.results_stack.addWidget(self.tree)           # page 0: results
         self.results_stack.addWidget(self.loading_label)  # page 1: loading
+        self.results_stack.addWidget(error_page)          # page 2: error
         layout.addWidget(self.results_stack, stretch=1)
 
         hint = QLabel("Double-click to copy · right-click a name to iterate on it")
@@ -312,16 +350,28 @@ class NamerWindow(QMainWindow):
         models = self._all_models
         if self.free_only.isChecked():
             models = [m for m in models if m.endswith(":free")] or models
+        recents = self.prefs.get("recent_models", [])
         self.model.clear()
+        if recents:
+            self.model.addItems(recents)  # "recently chosen" section on top
+            self.model.insertSeparator(len(recents))
         self.model.addItems(models)
         # Searchable dropdown: type any substring to filter, case-insensitive.
-        completer = QCompleter(models, self.model)
+        completer = QCompleter(recents + models, self.model)
         completer.setFilterMode(Qt.MatchContains)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setCompletionMode(QCompleter.PopupCompletion)
         self.model.setCompleter(completer)
-        if current in models:
+        if current:
             self.model.setCurrentText(current)
+
+    def _remember_model(self, model):
+        recents = [model] + [m for m in self.prefs.get("recent_models", [])
+                             if m != model]
+        self.prefs["recent_models"] = recents[:prefs.MAX_RECENT]
+        self.prefs["last_model"] = model
+        prefs.save(self.prefs)
+        self._apply_model_filter()
 
     def _load_models(self):
         self.bridge.models_ready.emit(llm.list_models())
@@ -370,12 +420,20 @@ class NamerWindow(QMainWindow):
         if not description:
             self.statusBar().showMessage("Type a description first.")
             return
+        if description != self._last_description:
+            # A genuinely new naming task: start history fresh.
+            self._history.clear()
+            self._hist_pos = -1
+            self._last_description = description
+            self.generate_btn.setText("Generate")
+            self._update_nav()
         self.store.learn(description)  # feed the autocomplete database
         self._start_llm(description, status=None)
 
     def _start_llm(self, description, extra="", status=None):
         context = self.context_group.checkedButton().text()
         model = self.model.currentText().strip()
+        self._remember_model(model)
         self.generate_btn.setEnabled(False)
         message = status or f"Asking {model} via OpenRouter…"
         self.statusBar().showMessage(message)
@@ -388,16 +446,14 @@ class NamerWindow(QMainWindow):
     def _run_llm(self, description, context, model, extra):
         ok, reason = llm.is_available()
         if not ok:
-            self.bridge.results_ready.emit(
-                [("LLM not configured", reason.replace("\n", " "))],
-                "Add your OpenRouter key in File → Settings.")
+            self.bridge.error_ready.emit(
+                reason.replace("\n", " ") + " (File → Settings)")
             return
         try:
             rows = llm.suggest(description, context, model, extra=extra)
             self.bridge.results_ready.emit(rows, f"{len(rows)} ideas from {model}.")
         except Exception as exc:
-            self.bridge.results_ready.emit(
-                [("Error", str(exc))], "LLM request failed.")
+            self.bridge.error_ready.emit(str(exc))
 
     def _show_results(self, rows, status):
         # New result set: drop any forward history, then append.
@@ -411,6 +467,13 @@ class NamerWindow(QMainWindow):
         if 0 <= new_pos < len(self._history):
             self._hist_pos = new_pos
             self._render()
+
+    def _show_error(self, message):
+        """Overlay an error on the results area — no history entry is made."""
+        self.error_label.setText(message)
+        self.results_stack.setCurrentIndex(2)
+        self.statusBar().showMessage("LLM request failed.")
+        self.generate_btn.setEnabled(True)
 
     def _render(self):
         rows, status = self._history[self._hist_pos]

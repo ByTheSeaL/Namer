@@ -66,5 +66,12 @@ class WordStore:
             (prefix + "%", prefix)).fetchone()
         return row[0] if row else None
 
+    def count(self) -> int:
+        return self._db.execute("SELECT COUNT(*) FROM words").fetchone()[0]
+
+    def clear(self) -> None:
+        self._db.execute("DELETE FROM words")
+        self._db.commit()
+
     def close(self):
         self._db.close()
