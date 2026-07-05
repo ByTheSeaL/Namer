@@ -1,0 +1,30 @@
+name: Build binaries
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: Namer.exe
+          - os: macos-latest
+            artifact: Namer.app
+          - os: ubuntu-latest
+            artifact: Namer
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --windowed --name Namer run.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Namer-${{ matrix.os }}
+          path: dist/
