@@ -20,11 +20,12 @@ Double-click any result to copy it to the clipboard.
 
 ## Running from source
 
-No dependencies beyond Python 3.10+ (Tkinter ships with Python — on some
-Linux distros install `python3-tk`). No venv needed.
+Requires Python 3.10+ and PySide6 (Qt for Python, LGPL):
 
 ```sh
-python3 run.py        # or: python3 -m namer
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python run.py        # or: .venv/bin/python -m namer
 ```
 
 ## OpenRouter key (for the Ask LLM tab)
@@ -58,7 +59,7 @@ manually) and download the artifacts from the Actions run.
 
 ```
 namer/
-  app.py         Tkinter UI (left: description; right: Simple / Ask LLM tabs)
+  app.py         PySide6 (Qt) UI (left: description; right: Simple / Ask LLM tabs)
   generators.py  local offline name generators (portmanteau, affixes, casing)
   datamuse.py    free word-association API client (stdlib urllib)
   llm.py         OpenRouter client with live model list (stdlib urllib)
