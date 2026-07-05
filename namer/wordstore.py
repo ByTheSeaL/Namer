@@ -12,8 +12,9 @@ import time
 from pathlib import Path
 
 from .constants import STOPWORDS
+from .paths import config_dir
 
-DB_PATH = Path.home() / ".config" / "namer" / "words.sqlite3"
+DB_PATH = config_dir() / "words.sqlite3"
 MIN_WORD_LEN = 4
 MIN_PREFIX_LEN = 2
 

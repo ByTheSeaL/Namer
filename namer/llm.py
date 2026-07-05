@@ -12,10 +12,11 @@ import json
 import os
 import re
 import urllib.request
-from pathlib import Path
+
+from .paths import config_dir
 
 API_BASE = "https://openrouter.ai/api/v1"
-KEY_FILE = Path.home() / ".config" / "namer" / "openrouter_key"
+KEY_FILE = config_dir() / "openrouter_key"
 TIMEOUT = 90
 
 # Shown before (or if) the live model list loads. Any OpenRouter model id works.

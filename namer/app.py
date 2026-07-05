@@ -15,12 +15,13 @@ from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QCompleter, QDialog,
     QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
-    QRadioButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-    QWidget,
+    QRadioButton, QSplitter, QStackedWidget, QToolButton, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import __version__, llm
 from .constants import CONTEXTS
+from .icon import app_icon
 from .wordstore import WordStore
 
 STYLE = """
@@ -113,7 +114,7 @@ class SettingsDialog(QDialog):
         note = QLabel(
             'Used to generate names. Get a key at '
             '<a href="https://openrouter.ai/keys">openrouter.ai/keys</a>. '
-            'Stored in ~/.config/namer/openrouter_key.')
+            f'Stored in {llm.KEY_FILE}.')
         note.setWordWrap(True)
         note.setOpenExternalLinks(True)
         note.setProperty("hint", True)
@@ -143,6 +144,8 @@ class NamerWindow(QMainWindow):
 
         self.store = WordStore()
         self._all_models: list[str] = list(llm.FALLBACK_MODELS)
+        self._history: list[tuple[list, str]] = []  # (rows, status) per result set
+        self._hist_pos = -1
 
         self.bridge = Bridge()
         self.bridge.models_ready.connect(self._set_models)
@@ -257,6 +260,24 @@ class NamerWindow(QMainWindow):
         layout.addLayout(model_row)
         self._apply_model_filter()
 
+        nav_row = QHBoxLayout()
+        self.back_btn = QToolButton()
+        self.back_btn.setArrowType(Qt.LeftArrow)
+        self.back_btn.setToolTip("Back to the previous list of results")
+        self.back_btn.clicked.connect(lambda: self._go(-1))
+        self.fwd_btn = QToolButton()
+        self.fwd_btn.setArrowType(Qt.RightArrow)
+        self.fwd_btn.setToolTip("Forward to the next list of results")
+        self.fwd_btn.clicked.connect(lambda: self._go(+1))
+        nav_row.addWidget(self.back_btn)
+        nav_row.addWidget(self.fwd_btn)
+        self.hist_label = QLabel("")
+        self.hist_label.setProperty("hint", True)
+        nav_row.addWidget(self.hist_label)
+        nav_row.addStretch(1)
+        layout.addLayout(nav_row)
+        self._update_nav()
+
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
         self.tree.setHeaderLabels(["Name", "Why"])
@@ -266,7 +287,15 @@ class NamerWindow(QMainWindow):
         self.tree.itemDoubleClicked.connect(self._copy_item)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._tree_menu)
-        layout.addWidget(self.tree, stretch=1)
+
+        self.loading_label = QLabel("")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setProperty("hint", True)
+
+        self.results_stack = QStackedWidget()
+        self.results_stack.addWidget(self.tree)          # page 0: results
+        self.results_stack.addWidget(self.loading_label)  # page 1: loading
+        layout.addWidget(self.results_stack, stretch=1)
 
         hint = QLabel("Double-click to copy · right-click a name to iterate on it")
         hint.setProperty("hint", True)
@@ -348,7 +377,10 @@ class NamerWindow(QMainWindow):
         context = self.context_group.checkedButton().text()
         model = self.model.currentText().strip()
         self.generate_btn.setEnabled(False)
-        self.statusBar().showMessage(status or f"Asking {model} via OpenRouter…")
+        message = status or f"Asking {model} via OpenRouter…"
+        self.statusBar().showMessage(message)
+        self.loading_label.setText(message)
+        self.results_stack.setCurrentIndex(1)
         threading.Thread(target=self._run_llm,
                          args=(description, context, model, extra),
                          daemon=True).start()
@@ -368,18 +400,43 @@ class NamerWindow(QMainWindow):
                 [("Error", str(exc))], "LLM request failed.")
 
     def _show_results(self, rows, status):
+        # New result set: drop any forward history, then append.
+        del self._history[self._hist_pos + 1:]
+        self._history.append((rows, status))
+        self._hist_pos = len(self._history) - 1
+        self._render()
+
+    def _go(self, delta):
+        new_pos = self._hist_pos + delta
+        if 0 <= new_pos < len(self._history):
+            self._hist_pos = new_pos
+            self._render()
+
+    def _render(self):
+        rows, status = self._history[self._hist_pos]
         self.tree.clear()
         for name, why in rows:
             self.tree.addTopLevelItem(QTreeWidgetItem([name, why]))
+        self.results_stack.setCurrentIndex(0)
         self.statusBar().showMessage(status)
         self.generate_btn.setEnabled(True)
         self.generate_btn.setText("Regenerate")
+        self._update_nav()
+
+    def _update_nav(self):
+        self.back_btn.setEnabled(self._hist_pos > 0)
+        self.fwd_btn.setEnabled(self._hist_pos < len(self._history) - 1)
+        if len(self._history) > 1:
+            self.hist_label.setText(f"{self._hist_pos + 1} / {len(self._history)}")
+        else:
+            self.hist_label.setText("")
 
 
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
+    app.setWindowIcon(app_icon())
     window = NamerWindow()
     window.show()
     sys.exit(app.exec())

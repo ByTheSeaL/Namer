@@ -26,7 +26,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyinstaller
-      - run: pyinstaller --onefile --windowed --name Namer run.py
+      - name: Build
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pyinstaller --onefile --windowed --name Namer --icon assets/icon.ico run.py
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            pyinstaller --onefile --windowed --name Namer --icon assets/icon.icns run.py
+          else
+            pyinstaller --onefile --windowed --name Namer run.py
+          fi
       - name: Rename for release
         shell: bash
         run: |
