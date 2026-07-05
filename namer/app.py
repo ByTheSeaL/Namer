@@ -1,9 +1,8 @@
 """Namer — PySide6 (Qt) UI.
 
 Layout: description panel on the left (context radioset + autocompleting
-text box); results tabs on the right — "Simple" (local generators +
-Datamuse, free) and "Ask LLM" (OpenRouter) — each with its own
-Generate/Regenerate button.
+text box); LLM results on the right with a searchable model picker.
+Right-click a result to iterate on it (expand / variations / refine).
 """
 
 import re
@@ -13,13 +12,15 @@ import threading
 from PySide6.QtCore import QObject, QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QCompleter, QDialog,
     QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
-    QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+    QRadioButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
-from . import __version__, datamuse, generators, llm
+from . import __version__, llm
+from .constants import CONTEXTS
 from .wordstore import WordStore
 
 STYLE = """
@@ -34,8 +35,6 @@ QPushButton {
 }
 QPushButton:hover { background: #3b5be0; }
 QPushButton:disabled { background: #a9b4d0; }
-QTabWidget::pane { border: 1px solid #c8c8d0; border-radius: 6px; top: -1px; }
-QTabBar::tab { padding: 6px 18px; }
 QTreeWidget::item { padding: 3px; }
 QLabel[hint="true"] { color: #888; }
 """
@@ -64,13 +63,11 @@ class CompletingTextEdit(QPlainTextEdit):
     def _refresh_suggestion(self):
         prefix = self._current_prefix()
         word = self._store.complete(prefix) if prefix else None
-        # Keep the user's capitalization; suggest only the remainder.
         self._suggestion = word[len(prefix):] if word else ""
         self.viewport().update()
 
     def keyPressEvent(self, event):
-        if self._suggestion and event.key() in (Qt.Key_Tab, Qt.Key_Right) and (
-                event.key() == Qt.Key_Tab or event.modifiers() & Qt.ControlModifier):
+        if self._suggestion and event.key() == Qt.Key_Tab:
             self.insertPlainText(self._suggestion)
             self._suggestion = ""
             self.viewport().update()
@@ -114,7 +111,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
 
         note = QLabel(
-            'Used by the Ask LLM tab. Get a key at '
+            'Used to generate names. Get a key at '
             '<a href="https://openrouter.ai/keys">openrouter.ai/keys</a>. '
             'Stored in ~/.config/namer/openrouter_key.')
         note.setWordWrap(True)
@@ -135,7 +132,7 @@ class SettingsDialog(QDialog):
 class Bridge(QObject):
     """Thread-safe channel from worker threads to the UI (queued signals)."""
     models_ready = Signal(list)
-    results_ready = Signal(str, list, str)  # mode, rows, status
+    results_ready = Signal(list, str)  # rows, status
 
 
 class NamerWindow(QMainWindow):
@@ -145,6 +142,7 @@ class NamerWindow(QMainWindow):
         self.resize(920, 560)
 
         self.store = WordStore()
+        self._all_models: list[str] = list(llm.FALLBACK_MODELS)
 
         self.bridge = Bridge()
         self.bridge.models_ready.connect(self._set_models)
@@ -161,7 +159,7 @@ class NamerWindow(QMainWindow):
         self.setCentralWidget(self.splitter)
 
         self.statusBar().showMessage(
-            "Describe the thing you want to name, then pick a tab.")
+            "Describe the thing you want to name, then hit Generate.")
 
         threading.Thread(target=self._load_models, daemon=True).start()
 
@@ -201,13 +199,12 @@ class NamerWindow(QMainWindow):
         QMessageBox.about(
             self, "About Namer",
             f"<b>Namer {__version__}</b><br>Helps you name things — code, "
-            "fiction, papers, products.<br><br>Free ideas: local generators + "
-            "the Datamuse API.<br>LLM ideas: any model on OpenRouter.<br><br>"
+            "fiction, papers, products.<br><br>Powered by any model on "
+            "OpenRouter.<br><br>"
             "<a href='https://github.com/ByTheSeaL/Namer'>github.com/ByTheSeaL/Namer</a>")
 
     def _copy_selected(self):
-        tree = self.simple_tree if self.tabs.currentIndex() == 0 else self.llm_tree
-        items = tree.selectedItems()
+        items = self.tree.selectedItems()
         if items:
             self._copy_item(items[0], 0)
 
@@ -223,7 +220,7 @@ class NamerWindow(QMainWindow):
         self.context_group = QButtonGroup(self)
         radios = QVBoxLayout()
         radios.setSpacing(2)
-        for i, name in enumerate(generators.CONTEXTS):
+        for i, name in enumerate(CONTEXTS):
             radio = QRadioButton(name)
             if i == 0:
                 radio.setChecked(True)
@@ -241,133 +238,142 @@ class NamerWindow(QMainWindow):
         layout.addWidget(self.description, stretch=1)
         return panel
 
-    # ---------- right panel: tabs ----------
+    # ---------- right panel: model picker + results ----------
 
     def _build_right(self):
-        self.tabs = QTabWidget()
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(6, 8, 12, 12)
 
-        simple = QWidget()
-        s_layout = QVBoxLayout(simple)
-        s_layout.setContentsMargins(8, 8, 12, 8)
-        self.simple_tree = self._make_tree()
-        s_layout.addWidget(self.simple_tree)
-        s_layout.addWidget(self._hint_label())
-        self.simple_btn = QPushButton("Generate")
-        self.simple_btn.clicked.connect(lambda: self.on_generate("simple"))
-        s_layout.addWidget(self.simple_btn)
-        self.tabs.addTab(simple, "Simple")
-
-        llm_tab = QWidget()
-        l_layout = QVBoxLayout(llm_tab)
-        l_layout.setContentsMargins(8, 8, 12, 8)
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("Model"))
         self.model = QComboBox()
         self.model.setEditable(True)
-        self.model.addItems(llm.FALLBACK_MODELS)
+        self.model.setInsertPolicy(QComboBox.NoInsert)
         model_row.addWidget(self.model, stretch=1)
-        l_layout.addLayout(model_row)
-        self.llm_tree = self._make_tree()
-        l_layout.addWidget(self.llm_tree)
-        l_layout.addWidget(self._hint_label())
-        self.llm_btn = QPushButton("Generate")
-        self.llm_btn.clicked.connect(lambda: self.on_generate("llm"))
-        l_layout.addWidget(self.llm_btn)
-        self.tabs.addTab(llm_tab, "Ask LLM")
+        self.free_only = QCheckBox("Free only")
+        self.free_only.toggled.connect(self._apply_model_filter)
+        model_row.addWidget(self.free_only)
+        layout.addLayout(model_row)
+        self._apply_model_filter()
 
-        return self.tabs
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderLabels(["Name", "Why"])
+        self.tree.setRootIsDecorated(False)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setColumnWidth(0, 190)
+        self.tree.itemDoubleClicked.connect(self._copy_item)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._tree_menu)
+        layout.addWidget(self.tree, stretch=1)
 
-    def _make_tree(self):
-        tree = QTreeWidget()
-        tree.setColumnCount(2)
-        tree.setHeaderLabels(["Name", "Why"])
-        tree.setRootIsDecorated(False)
-        tree.setAlternatingRowColors(True)
-        tree.setColumnWidth(0, 190)
-        tree.itemDoubleClicked.connect(self._copy_item)
-        return tree
+        hint = QLabel("Double-click to copy · right-click a name to iterate on it")
+        hint.setProperty("hint", True)
+        layout.addWidget(hint)
 
-    def _hint_label(self):
-        label = QLabel("Double-click a name to copy it")
-        label.setProperty("hint", True)
-        return label
+        self.generate_btn = QPushButton("Generate")
+        self.generate_btn.clicked.connect(self.on_generate)
+        self.generate_btn.setShortcut("Ctrl+Return")
+        layout.addWidget(self.generate_btn)
+        return panel
+
+    def _apply_model_filter(self):
+        current = self.model.currentText()
+        models = self._all_models
+        if self.free_only.isChecked():
+            models = [m for m in models if m.endswith(":free")] or models
+        self.model.clear()
+        self.model.addItems(models)
+        # Searchable dropdown: type any substring to filter, case-insensitive.
+        completer = QCompleter(models, self.model)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.model.setCompleter(completer)
+        if current in models:
+            self.model.setCurrentText(current)
+
+    def _load_models(self):
+        self.bridge.models_ready.emit(llm.list_models())
+
+    def _set_models(self, models):
+        self._all_models = models
+        self._apply_model_filter()
+
+    # ---------- results: copy + iterate ----------
 
     def _copy_item(self, item, _column):
         name = item.text(0)
         QGuiApplication.clipboard().setText(name)
         self.statusBar().showMessage(f"Copied “{name}” to clipboard.")
 
-    # ---------- generation ----------
+    def _tree_menu(self, pos):
+        item = self.tree.itemAt(pos)
+        if item is None:
+            return
+        name = item.text(0)
+        menu = QMenu(self)
+        copy = menu.addAction(f"Copy “{name}”")
+        copy.triggered.connect(lambda: self._copy_item(item, 0))
+        menu.addSeparator()
+        expand = menu.addAction("More like this — expand the idea")
+        expand.triggered.connect(lambda: self._iterate(name, "expand"))
+        variations = menu.addAction("Variations — close permutations")
+        variations.triggered.connect(lambda: self._iterate(name, "variations"))
+        refine = menu.addAction("Refine — keep what works, fix the rest")
+        refine.triggered.connect(lambda: self._iterate(name, "refine"))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
 
-    def _load_models(self):
-        self.bridge.models_ready.emit(llm.list_models())
-
-    def _set_models(self, models):
-        current = self.model.currentText()
-        self.model.clear()
-        self.model.addItems(models)
-        if current in models:
-            self.model.setCurrentText(current)
-
-    def _button_for(self, mode):
-        return self.simple_btn if mode == "simple" else self.llm_btn
-
-    def on_generate(self, mode):
+    def _iterate(self, name, kind):
         description = self.description.toPlainText().strip()
         if not description:
             self.statusBar().showMessage("Type a description first.")
             return
-        context = self.context_group.checkedButton().text()
+        extra = llm.ITERATE[kind].format(name=name)
+        self._start_llm(description, extra=extra,
+                        status=f"Iterating on “{name}” ({kind})…")
+
+    # ---------- generation ----------
+
+    def on_generate(self):
+        description = self.description.toPlainText().strip()
+        if not description:
+            self.statusBar().showMessage("Type a description first.")
+            return
         self.store.learn(description)  # feed the autocomplete database
-        self._button_for(mode).setEnabled(False)
+        self._start_llm(description, status=None)
 
-        if mode == "simple":
-            self.statusBar().showMessage("Generating free ideas (local + Datamuse)…")
-            threading.Thread(target=self._run_simple, args=(description, context),
-                             daemon=True).start()
-        else:
-            model = self.model.currentText().strip()
-            self.statusBar().showMessage(f"Asking {model} via OpenRouter…")
-            threading.Thread(target=self._run_llm, args=(description, context, model),
-                             daemon=True).start()
+    def _start_llm(self, description, extra="", status=None):
+        context = self.context_group.checkedButton().text()
+        model = self.model.currentText().strip()
+        self.generate_btn.setEnabled(False)
+        self.statusBar().showMessage(status or f"Asking {model} via OpenRouter…")
+        threading.Thread(target=self._run_llm,
+                         args=(description, context, model, extra),
+                         daemon=True).start()
 
-    def _run_simple(self, description, context):
-        keywords = generators.extract_keywords(description)
-        extra = datamuse.associations(keywords)
-        rows = generators.generate(keywords, context, extra_words=extra)
-        source = "local + Datamuse" if extra else "local only (Datamuse unreachable)"
-        if not rows:
-            rows = [("—", "No usable keywords found; try a longer description.")]
-        self.bridge.results_ready.emit(
-            "simple", rows,
-            f"{len(rows)} ideas ({source}). Regenerate for a fresh shuffle.")
-
-    def _run_llm(self, description, context, model):
+    def _run_llm(self, description, context, model, extra):
         ok, reason = llm.is_available()
         if not ok:
             self.bridge.results_ready.emit(
-                "llm", [("LLM not configured", reason.replace("\n", " "))],
-                "LLM unavailable — the Simple tab still works.")
+                [("LLM not configured", reason.replace("\n", " "))],
+                "Add your OpenRouter key in File → Settings.")
             return
         try:
-            keywords = generators.extract_keywords(description)
-            seeds = datamuse.associations(keywords)
-            rows = llm.suggest(description, context, model, seed_words=seeds)
-            self.bridge.results_ready.emit(
-                "llm", rows, f"{len(rows)} ideas from {model}.")
+            rows = llm.suggest(description, context, model, extra=extra)
+            self.bridge.results_ready.emit(rows, f"{len(rows)} ideas from {model}.")
         except Exception as exc:
             self.bridge.results_ready.emit(
-                "llm", [("Error", str(exc))], "LLM request failed.")
+                [("Error", str(exc))], "LLM request failed.")
 
-    def _show_results(self, mode, rows, status):
-        tree = self.simple_tree if mode == "simple" else self.llm_tree
-        tree.clear()
+    def _show_results(self, rows, status):
+        self.tree.clear()
         for name, why in rows:
-            tree.addTopLevelItem(QTreeWidgetItem([name, why]))
+            self.tree.addTopLevelItem(QTreeWidgetItem([name, why]))
         self.statusBar().showMessage(status)
-        button = self._button_for(mode)
-        button.setEnabled(True)
-        button.setText("Regenerate")
+        self.generate_btn.setEnabled(True)
+        self.generate_btn.setText("Regenerate")
 
 
 def main():

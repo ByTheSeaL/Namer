@@ -5,18 +5,20 @@ name things: code identifiers, fiction characters, paper titles, products.
 
 ## How it works
 
-Type a description of the thing on the **left**, pick a context, and choose
-a tab on the right:
+Type a description of the thing on the **left**, pick a context, and hit
+**Generate**. Your description goes to any model on
+[OpenRouter](https://openrouter.ai) — the model picker is searchable (type
+any substring) and has a "Free only" filter for OpenRouter's no-cost models.
 
-- **Simple** — free and instant. Extracts keywords from your description,
-  enriches them with word associations from the [Datamuse API](https://www.datamuse.com/api/)
-  (free, no key, works offline in degraded mode), and mashes them into
-  portmanteaus, compounds, and affixed coinages styled for your context.
-- **Ask LLM** — sends your description (seeded with the Datamuse research)
-  to any model on [OpenRouter](https://openrouter.ai). Pick from the live
-  model list in the dropdown. Returns names with rationales.
+Results come back as names with rationales:
 
-Double-click any result to copy it to the clipboard.
+- **Double-click** a name to copy it.
+- **Right-click** a name to iterate on it: *More like this* (expand the
+  idea), *Variations* (close permutations), or *Refine* (keep what works,
+  fix the rest).
+
+The description box learns: uncommon words you've typed before reappear as
+grey inline suggestions — press Tab to accept.
 
 ## Running from source
 
@@ -28,7 +30,7 @@ python3 -m venv .venv
 .venv/bin/python run.py        # or: .venv/bin/python -m namer
 ```
 
-## OpenRouter key (for the Ask LLM tab)
+## OpenRouter key
 
 Either set the environment variable:
 
@@ -36,8 +38,8 @@ Either set the environment variable:
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-or put the key on the first line of `~/.config/namer/openrouter_key`.
-Get a key at <https://openrouter.ai/keys>. The Simple tab works without any key.
+or open **File → Settings** in the app and paste it there (stored in
+`~/.config/namer/openrouter_key`). Get a key at <https://openrouter.ai/keys>.
 
 ## Building standalone binaries (EXE etc.)
 
@@ -59,9 +61,9 @@ manually) and download the artifacts from the Actions run.
 
 ```
 namer/
-  app.py         PySide6 (Qt) UI (left: description; right: Simple / Ask LLM tabs)
-  generators.py  local offline name generators (portmanteau, affixes, casing)
-  datamuse.py    free word-association API client (stdlib urllib)
-  llm.py         OpenRouter client with live model list (stdlib urllib)
+  app.py         PySide6 (Qt) UI (left: description; right: results + model picker)
+  llm.py         OpenRouter client: live model list, suggest + iterate prompts
+  wordstore.py   SQLite-backed word store powering the inline autocomplete
+  constants.py   contexts and stopwords
 run.py           launcher / PyInstaller entry point
 ```

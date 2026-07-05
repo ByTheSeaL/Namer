@@ -101,19 +101,32 @@ def list_models() -> list[str]:
         return FALLBACK_MODELS
 
 
-def suggest(description: str, context: str, model: str,
-            seed_words: list[str] | None = None, count: int = 12) -> list[tuple[str, str]]:
-    """Return (name, rationale) pairs from the chosen model. Raises on API errors."""
-    seed_note = ""
-    if seed_words:
-        seed_note = ("\n\nWord-association research turned up these related words — "
-                     "use any that spark good ideas, ignore the rest: "
-                     + ", ".join(seed_words[:20]))
+# Instructions for iterating on a specific result the user liked.
+ITERATE = {
+    "expand": "The name “{name}” is in the right direction. Generate names that "
+              "build on the same idea, metaphor, or root — push the concept "
+              "further and explore where it leads.",
+    "variations": "Generate close variations and permutations of the name "
+                  "“{name}”: alternate spellings, word-order changes, different "
+                  "affixes, adjacent word forms. Stay close to the original.",
+    "refine": "The name “{name}” half-works. Identify what's good about it and "
+              "generate improved, more polished alternatives that keep its "
+              "strengths while fixing its weaknesses.",
+}
 
+
+def suggest(description: str, context: str, model: str,
+            count: int = 12, extra: str = "") -> list[tuple[str, str]]:
+    """Return (name, rationale) pairs from the chosen model. Raises on API errors.
+
+    extra: optional follow-up instruction, e.g. an ITERATE template focused
+    on a name from a previous round.
+    """
     prompt = (
         f"Context: {context}. {CONTEXT_GUIDANCE.get(context, '')}\n\n"
-        f"Thing to name: {description}{seed_note}\n\n"
-        f"Give {count} name ideas."
+        f"Thing to name: {description}\n\n"
+        + (extra + "\n\n" if extra else "")
+        + f"Give {count} name ideas."
     )
 
     data = _request("/chat/completions", {

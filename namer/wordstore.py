@@ -11,7 +11,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .generators import STOPWORDS
+from .constants import STOPWORDS
 
 DB_PATH = Path.home() / ".config" / "namer" / "words.sqlite3"
 MIN_WORD_LEN = 4
